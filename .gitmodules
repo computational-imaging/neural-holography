@@ -1,0 +1,3 @@
+[submodule "utils/pytorch_prototyping"]
+	path = utils/pytorch_prototyping
+	url = https://github.com/vsitzmann/pytorch_prototyping
