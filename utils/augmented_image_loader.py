@@ -128,6 +128,9 @@ class ImageLoader:
     def load_image(self, filenum, *augmentation_states):
         im = imread(self.im_names[filenum])
 
+        if len(im.shape) < 3:
+            im = np.repeat(im[:, :, np.newaxis], 3, axis=2)  # augment channels for gray images
+
         if self.channel is None:
             im = im[..., :3]  # remove alpha channel, if any
         else:

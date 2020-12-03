@@ -38,8 +38,8 @@ def gerchberg_saxton(init_phase, target_amp, num_iters, prop_dist, wavelength, f
     :param propagator: predefined function or model instance for the propagation.
     :param writer: tensorboard writer
     :param dtype: torch datatype for computation at different precision, default torch.float32.
-    :param precomputed_H_f: pre-computed kernel for forward prop (SLM to image)
-    :param precomputed_H_b: pre-computed kernel for backward propagation (image to SLM)
+    :param precomputed_H_f: A Pytorch complex64 tensor, pre-computed kernel for forward prop (SLM to image)
+    :param precomputed_H_b: A Pytorch complex64 tensor, pre-computed kernel for backward propagation (image to SLM)
 
     Output
     ------
@@ -47,7 +47,8 @@ def gerchberg_saxton(init_phase, target_amp, num_iters, prop_dist, wavelength, f
     """
 
     # initial guess; random phase
-    slm_field = torch.stack((torch.ones_like(init_phase), init_phase), -1)
+    real, imag = utils.polar_to_rect(torch.ones_like(init_phase), init_phase)
+    slm_field = torch.complex(real, imag)
 
     # run the GS algorithm
     for k in range(num_iters):
@@ -57,7 +58,7 @@ def gerchberg_saxton(init_phase, target_amp, num_iters, prop_dist, wavelength, f
 
         # write to tensorboard / write phase image
         # Note that it takes 0.~ s for writing it to tensorboard
-        if k > 0 and k % 10 == 0:
+        if False:#k > 0 and k % 10 == 0:
             utils.write_gs_summary(slm_field, recon_field, target_amp, k, writer, prefix='test')
 
         # replace amplitude at the image plane
@@ -71,15 +72,13 @@ def gerchberg_saxton(init_phase, target_amp, num_iters, prop_dist, wavelength, f
         slm_field = utils.replace_amplitude(slm_field, torch.ones_like(target_amp))
 
     # return phases
-    _, final_slm_phase = utils.rect_to_polar(slm_field[..., 0], slm_field[..., 1])
-
-    return final_slm_phase
+    return slm_field.angle()
 
 
 # 2. SGD
 def stochastic_gradient_descent(init_phase, target_amp, num_iters, prop_dist, wavelength, feature_size,
                                 roi_res=None, phase_path=None, prop_model='ASM', propagator=None,
-                                loss=nn.MSELoss(), lr=0.01, lr_s=0.003, s0=1.0,
+                                loss=nn.MSELoss(), lr=0.01, lr_s=0.003, s0=1.0, citl=False, camera_prop=None,
                                 writer=None, dtype=torch.float32, precomputed_H=None):
 
     """
@@ -103,7 +102,7 @@ def stochastic_gradient_descent(init_phase, target_amp, num_iters, prop_dist, wa
     :param s0: initial scale
     :param writer: Tensorboard writer instance
     :param dtype: default torch.float32
-    :param precomputed_H: pre-computed kernel shape of (1,1,2H,2W,2) for fast computation.
+    :param precomputed_H: A Pytorch complex64 tensor, pre-computed kernel shape of (1,1,2H,2W) for fast computation.
 
     Output
     ------
@@ -127,18 +126,30 @@ def stochastic_gradient_descent(init_phase, target_amp, num_iters, prop_dist, wa
 
     # run the iterative algorithm
     for k in range(num_iters):
+        print(k)
         optimizer.zero_grad()
         # forward propagation from the SLM plane to the target plane
         real, imag = utils.polar_to_rect(torch.ones_like(slm_phase), slm_phase)
-        slm_field = torch.stack((real, imag), -1)
+        slm_field = torch.complex(real, imag)
+
         recon_field = utils.propagate_field(slm_field, propagator, prop_dist, wavelength, feature_size,
                                             prop_model, dtype, precomputed_H)
 
         # get amplitude
-        recon_amp, recon_phase = utils.rect_to_polar(recon_field[..., 0], recon_field[..., 1])
+        recon_amp = recon_field.abs()
 
         # crop roi
-        out_amp = utils.crop_image(recon_amp, target_shape=roi_res, stacked_complex=False)
+        recon_amp = utils.crop_image(recon_amp, target_shape=roi_res, stacked_complex=False)
+
+        # camera-in-the-loop technique
+        if citl:
+            captured_amp = camera_prop(slm_phase)
+
+            # use the gradient of proxy, replacing the amplitudes
+            # captured_amp is assumed that its size already matches that of recon_amp
+            out_amp = recon_amp + (captured_amp - recon_amp).detach()
+        else:
+            out_amp = recon_amp
 
         # calculate loss and backprop
         lossValue = loss(s * out_amp, target_amp)
@@ -148,7 +159,7 @@ def stochastic_gradient_descent(init_phase, target_amp, num_iters, prop_dist, wa
         # write to tensorboard / write phase image
         # Note that it takes 0.~ s for writing it to tensorboard
         with torch.no_grad():
-            if k % 10 == 0:
+            if k % 50 == 0:
                 utils.write_sgd_summary(slm_phase, out_amp, target_amp, k,
                                         writer=writer, path=phase_path, s=s, prefix='test')
 
@@ -165,7 +176,7 @@ def double_phase_amplitude_coding(target_phase, target_amp, prop_dist, wavelengt
     Input
     -----
     :param target_phase: The phase at the target image plane
-    :param target_amp: A tensor, (B,C,H,W,A), the amplitude at the target image plane.
+    :param target_amp: A tensor, (B,C,H,W), the amplitude at the target image plane.
     :param prop_dist: propagation distance, in m.
     :param wavelength: wavelength, in m.
     :param feature_size: The SLM pixel pitch, in meters.
@@ -176,10 +187,10 @@ def double_phase_amplitude_coding(target_phase, target_amp, prop_dist, wavelengt
 
     Output
     ------
-    :return: a tensor, the optimized phase pattern at the SLM plane, in the shape of (1,1,H,W,1)
+    :return: a tensor, the optimized phase pattern at the SLM plane, in the shape of (1,1,H,W)
     """
     real, imag = utils.polar_to_rect(target_amp, target_phase)
-    target_field = torch.stack((real, imag), -1)
+    target_field = torch.complex(real, imag)
 
     slm_field = utils.propagate_field(target_field, propagator, prop_dist, wavelength, feature_size,
                                       prop_model, dtype, precomputed_H)
@@ -192,13 +203,10 @@ def double_phase_amplitude_coding(target_phase, target_amp, prop_dist, wavelengt
 def double_phase(field, three_pi=True, mean_adjust=True):
     """Converts a complex field to double phase coding
 
-    field: tensor with dims [..., height, width, 2], where the last dim is the
-        real and imaginary components, stacked
+    field: A complex64 tensor with dims [..., height, width]
     three_pi, mean_adjust: see double_phase_amp_phase
     """
-    amplitudes, phases = utils.rect_to_polar(field[..., 0], field[..., 1])
-
-    return double_phase_amp_phase(amplitudes, phases, three_pi, mean_adjust)
+    return double_phase_amp_phase(field.abs(), field.angle(), three_pi, mean_adjust)
 
 
 def double_phase_amp_phase(amplitudes, phases, three_pi=True, mean_adjust=True):
@@ -209,7 +217,6 @@ def double_phase_amp_phase(amplitudes, phases, three_pi=True, mean_adjust=True):
     three_pi:  if True, outputs values in a 3pi range, instead of 2pi
     mean_adjust:  if True, centers the phases in the range of interest
     """
-
     # normalize
     amplitudes = amplitudes / amplitudes.max()
 

@@ -1,5 +1,5 @@
 """
-This is the script containing all tuility functions used for the implementation.
+This is the script containing all uility functions used for the implementation.
 
 This code and data is released under the Creative Commons Attribution-NonCommercial 4.0 International license (CC BY-NC.) In a nutshell:
     # The license is only for non-commercial use (commercial licenses can be obtained from Stanford).
@@ -86,24 +86,16 @@ def polar_to_rect(mag, ang):
 
 
 def replace_amplitude(field, amplitude):
-    """takes a complex-valued tensor with real/imag channels, converts to
+    """takes a Complex tensor with real/imag channels, converts to
     amplitude/phase, replaces amplitude, then converts back to real/imag
 
-    resolution of both tensors should be (M, N, height, width, 1 or 2)
+    resolution of both Complex64 tensors should be (M, N, height, width)
     """
-    # convert to amplitude and phase
-    field_amp, field_phase = rect_to_polar(field[..., 0], field[..., 1])
-
-    # get number of dimensions
-    ndims = np.shape(list(amplitude.size()))[0]
-    if ndims < 5:
-        amplitude = amplitude.unsqueeze(4)
-
     # replace amplitude with target amplitude and convert back to real/imag
-    real, imag = polar_to_rect(amplitude, field_phase.unsqueeze(4))
+    real, imag = polar_to_rect(amplitude, field.angle())
 
     # concatenate
-    return torch.cat((real, imag), 4)
+    return torch.complex(real, imag)
 
 
 def ifftshift(tensor):
@@ -311,14 +303,18 @@ def phasemap_8bit(phasemap, inverted=True):
     :return: output phasemap, with uint8 dtype (in [0, 255])
     """
 
-    out_phase = phasemap.cpu().detach().squeeze().numpy()
-    out_phase = ((out_phase + np.pi) % (2 * np.pi)) / (2 * np.pi)
+    output_phase = ((phasemap + np.pi) % (2 * np.pi)) / (2 * np.pi)
     if inverted:
-        phase_out_8bit = ((1 - out_phase) * 255).round().astype(np.uint8)  # quantized to 8 bits
+        phase_out_8bit = ((1 - output_phase) * 255).round().cpu().detach().squeeze().numpy().astype(np.uint8)  # quantized to 8 bits
     else:
-        phase_out_8bit = ((out_phase) * 255).round().astype(np.uint8)  # quantized to 8 bits
-
+        phase_out_8bit = ((output_phase) * 255).round().cpu().detach().squeeze().numpy().astype(np.uint8)  # quantized to 8 bits
     return phase_out_8bit
+
+
+def burst_img_processor(img_burst_list):
+    img_tensor = np.stack(img_burst_list, axis=0)
+    img_avg = np.mean(img_tensor, axis=0)
+    return im2float(img_avg)  # changed from int8 to float32
 
 
 def im2float(im, dtype=np.float32):
@@ -344,7 +340,7 @@ def propagate_field(input_field, propagator, prop_dist=0.2, wavelength=520e-9, f
 
     Input
     -----
-    :param input_field: pytorch tensor shape of (1, C, H, W, 2), the field before propagation, in X, Y coordinates
+    :param input_field: pytorch complex tensor shape of (1, C, H, W), the field before propagation, in X, Y coordinates
     :param prop_dist: propagation distance in m.
     :param wavelength: wavelength of the wave in m.
     :param feature_size: pixel pitch
@@ -355,15 +351,19 @@ def propagate_field(input_field, propagator, prop_dist=0.2, wavelength=520e-9, f
 
     Output
     -----
-    :return: output_field: pytorch tensor shape of (1, C, H, W, 2), the field after propagation, in X, Y coordinates
+    :return: output_field: pytorch complex tensor shape of (1, C, H, W), the field after propagation, in X, Y coordinates
     """
 
     if prop_model == 'ASM':
         output_field = propagator(u_in=input_field, z=prop_dist, feature_size=feature_size, wavelength=wavelength,
                                   dtype=dtype, precomped_H=precomputed_H)
-    elif 'MODEL' in prop_model:
-        # forward propagate through our citl-calibrated model
-        _, input_phase = rect_to_polar(input_field[..., 0], input_field[..., 1])
+    elif 'MODEL' in prop_model.upper():
+        # forward propagate through our citl-calibrated model.
+        # You can directly use this model propagation, not using this wrapper module.
+        _, input_phase = rect_to_polar(input_field.real, input_field.imag)
+        output_field = propagator(input_phase)
+    elif prop_model == 'CAMERA':
+        _, input_phase = rect_to_polar(input_field.real, input_field.imag)
         output_field = propagator(input_phase)
     else:
         raise ValueError('Unexpected prop_model value')
@@ -390,17 +390,26 @@ def write_sgd_summary(slm_phase, out_amp, target_amp, k,
     psnr_value = psnr(target_amp.squeeze().cpu().detach().numpy(), (s * out_amp).squeeze().cpu().detach().numpy())
     ssim_value = ssim(target_amp.squeeze().cpu().detach().numpy(), (s * out_amp).squeeze().cpu().detach().numpy())
 
+    s_min = (target_amp * out_amp).mean() / (out_amp**2).mean()
+    psnr_value_min = psnr(target_amp.squeeze().cpu().detach().numpy(), (s_min * out_amp).squeeze().cpu().detach().numpy())
+    ssim_value_min = ssim(target_amp.squeeze().cpu().detach().numpy(), (s_min * out_amp).squeeze().cpu().detach().numpy())
+
     if writer is not None:
         writer.add_image(f'{prefix}_Recon/amp', (s * out_amp).squeeze(0), k)
         writer.add_scalar(f'{prefix}_loss', loss_value, k)
         writer.add_scalar(f'{prefix}_psnr', psnr_value, k)
         writer.add_scalar(f'{prefix}_ssim', ssim_value, k)
 
+        writer.add_scalar(f'{prefix}_psnr/scaled', psnr_value_min, k)
+        writer.add_scalar(f'{prefix}_ssim/scaled', ssim_value_min, k)
+
+        writer.add_scalar(f'{prefix}_scalar', s, k)
+
 
 def write_gs_summary(slm_field, recon_field, target_amp, k, writer, roi=(880, 1600), prefix='test'):
     """tensorboard summary for GS"""
-    _, slm_phase = rect_to_polar(slm_field[..., 0], slm_field[..., 1])
-    recon_amp, recon_phase = rect_to_polar(recon_field[..., 0], recon_field[..., 1])
+    slm_phase = slm_field.angle()
+    recon_amp, recon_phase = recon_field.abs(), recon_field.angle()
     loss = nn.MSELoss().to(recon_amp.device)
 
     recon_amp = crop_image(recon_amp, target_shape=roi, stacked_complex=False)
@@ -441,3 +450,62 @@ def get_psnr_ssim(recon_amp, target_amp, multichannel=False):
     ssims['srgb'] = ssim(target_srgb, recon_srgb, multichannel=multichannel)
 
     return psnrs, ssims
+
+
+def str2bool(v):
+    """ Simple query parser for configArgParse (which doesn't support native bool from cmd)
+    Ref: https://stackoverflow.com/questions/15008758/parsing-boolean-values-with-argparse
+
+    """
+    if isinstance(v, bool):
+        return v
+    if v.lower() in ('yes', 'true', 't', 'y', '1'):
+        return True
+    elif v.lower() in ('no', 'false', 'f', 'n', '0'):
+        return False
+    else:
+        raise ValueError('Boolean value expected.')
+
+
+def make_kernel_gaussian(sigma, kernel_size):
+
+    # Create a x, y coordinate grid of shape (kernel_size, kernel_size, 2)
+    x_cord = torch.arange(kernel_size)
+    x_grid = x_cord.repeat(kernel_size).view(kernel_size, kernel_size)
+    y_grid = x_grid.t()
+    xy_grid = torch.stack([x_grid, y_grid], dim=-1)
+
+    mean = (kernel_size - 1) / 2
+    variance = sigma**2
+
+    # Calculate the 2-dimensional gaussian kernel which is
+    # the product of two gaussian distributions for two different
+    # variables (in this case called x and y)
+    gaussian_kernel = ((1 / (2 * math.pi * variance))
+                       * torch.exp(-torch.sum((xy_grid - mean)**2., dim=-1)
+                                   / (2 * variance)))
+    # Make sure sum of values in gaussian kernel equals 1.
+    gaussian_kernel = gaussian_kernel / torch.sum(gaussian_kernel)
+
+    # Reshape to 2d depthwise convolutional weight
+    gaussian_kernel = gaussian_kernel.view(1, 1, kernel_size, kernel_size)
+
+    return gaussian_kernel
+
+
+def quantized_phase(phasemap):
+    """
+    just quantize phase into 8bit and return a tensor with the same dtype
+    :param phasemap:
+    :return:
+    """
+
+    # Shift to [0 1]
+    phasemap = (phasemap + np.pi) / (2 * np.pi)
+
+    # Convert into integer and take rounding
+    phasemap = torch.round(255 * phasemap)
+
+    # Shift to original range
+    phasemap = phasemap / 255 * 2 * np.pi - np.pi
+    return phasemap

@@ -17,7 +17,7 @@ import torch
 import torch.nn as nn
 
 import utils.utils as utils
-from propagation_ASM import propagation_ASM
+from propagation_ASM import propagation_ASM, compute_zernike_basis, combine_zernike_basis
 from utils.pytorch_prototyping.pytorch_prototyping import Conv2dSame, Unet
 
 
@@ -96,6 +96,7 @@ class HoloNet(nn.Module):
         # objects to precompute
         self.zernike = None
         self.precomped_H = None
+        self.precomped_H_zernike = None
         self.source_amp = None
 
         # whether to pass zernike/source amp as layers or divide out manually
@@ -127,11 +128,11 @@ class HoloNet(nn.Module):
         if self.initial_phase is not None:
             init_phase = self.initial_phase(target_amp)
             real, imag = utils.polar_to_rect(target_amp, init_phase)
-            target_complex = torch.stack((real, imag), -1)
+            target_complex = torch.complex(real, imag)
         else:
             init_phase = torch.zeros_like(target_amp)
             # no need to convert, zero phase implies amplitude = real part
-            target_complex = torch.stack((target_amp, init_phase), -1)
+            target_complex = torch.complex(target_amp, init_phase)
 
         # subtract the additional target field
         if self.target_field is not None:
@@ -150,20 +151,20 @@ class HoloNet(nn.Module):
             self.precomped_H = self.precomped_H.to(self.dev).detach()
             self.precomped_H.requires_grad = False
 
-        # multi-part model propagation code will be released during SIGGRAPH Asia.
-        if self.zernike is None and self.zernike_coeffs is not None:
-            self.zernike_basis = compute_zernike_basis(self.zernike_coeffs.size()[0],
-                                                       [i * 2 for i in target_amp.size()[-2:]], wo_piston=True)
-            self.zernike_basis = self.zernike_basis.to(self.dev).detach()
-            self.zernike = combine_zernike_basis(self.zernike_coeffs, self.zernike_basis)
-            self.zernike = utils.ifftshift(self.zernike)
-            self.zernike = self.zernike.to(self.dev).detach()
-            self.zernike.requires_grad = False
-            self.precomped_H_zernike = utils.mul_complex(self.zernike, self.precomped_H)
-            self.precomped_H_zernike = self.precomped_H_zernike.to(self.dev).detach()
-            self.precomped_H_zernike.requires_grad = False
-        else:
-            self.precomped_H_zernike = self.precomped_H
+        if self.precomped_H_zernike is None:
+            if self.zernike is None and self.zernike_coeffs is not None:
+                self.zernike_basis = compute_zernike_basis(self.zernike_coeffs.size()[0],
+                                                           [i * 2 for i in target_amp.size()[-2:]], wo_piston=True)
+                self.zernike_basis = self.zernike_basis.to(self.dev).detach()
+                self.zernike = combine_zernike_basis(self.zernike_coeffs, self.zernike_basis)
+                self.zernike = utils.ifftshift(self.zernike)
+                self.zernike = self.zernike.to(self.dev).detach()
+                self.zernike.requires_grad = False
+                self.precomped_H_zernike = self.zernike * self.precomped_H
+                self.precomped_H_zernike = self.precomped_H_zernike.to(self.dev).detach()
+                self.precomped_H_zernike.requires_grad = False
+            else:
+                self.precomped_H_zernike = self.precomped_H
 
         # precompute the source amplitude, only once
         if self.source_amp is None and self.source_amplitude is not None:
@@ -178,7 +179,10 @@ class HoloNet(nn.Module):
                               linear_conv=self.linear_conv)
 
         # switch to amplitude+phase and apply source amplitude adjustment
-        amp, ang = utils.rect_to_polar(slm_naive[..., 0], slm_naive[..., 1])
+        amp, ang = utils.rect_to_polar(slm_naive.real, slm_naive.imag)
+        # amp, ang = slm_naive.abs(), slm_naive.angle()  # PyTorch 1.7.0 Complex tensor doesn't support
+                                                         # the gradient of angle() currently.
+
         if self.source_amp is not None and self.manual_aberr_corr:
             amp = amp / self.source_amp
 
