@@ -52,6 +52,7 @@ def gerchberg_saxton(init_phase, target_amp, num_iters, prop_dist, wavelength, f
 
     # run the GS algorithm
     for k in range(num_iters):
+        print(k)
         # SLM plane to image plane
         recon_field = utils.propagate_field(slm_field, propagator, prop_dist, wavelength, feature_size,
                                             prop_model, dtype, precomputed_H_f)

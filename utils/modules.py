@@ -14,9 +14,9 @@ import platform
 my_os = platform.system()
 if my_os == 'Windows':
     from utils.arduino_laser_control_module import ArduinoLaserControl
-    from utils.camera_capture_module import CameraCapture
+    #from utils.camera_capture_module import CameraCapture
     from utils.calibration_module import Calibration
-    from utils.slm_display_module import SLMDisplay
+    #from utils.slm_display_module import SLMDisplay
 
 
 class GS(nn.Module):

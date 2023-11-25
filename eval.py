@@ -66,7 +66,7 @@ elif 'UNET' in run_id.upper():
 image_res = (1080, 1920)
 roi_res = (880, 1600)  # regions of interest (to penalize)
 dtype = torch.float32  # default datatype (Note: the result may be slightly different if you use float64, etc.)
-device = torch.device('cuda')  # The gpu you are using
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # You can pre-compute kernels for fast-computation
 precomputed_H = [None] * 3
@@ -100,7 +100,8 @@ print(f'  - reconstruction with {opt.prop_model}... ')
 data_path = './data'
 recon_path = './recon'
 
-# Augmented image loader (if you want to shuffle, augment dataset, put options accordingly.) 
+# Augmented image loader (if you want to shuffle, augment dataset, put options accordingly.)
+
 image_loader = ImageLoader(data_path, channel=channel if channel < 3 else None,
                            image_res=image_res, homography_res=roi_res,
                            crop_to_homography=True,

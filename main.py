@@ -32,7 +32,7 @@ from torch.utils.tensorboard import SummaryWriter
 import utils.utils as utils
 from utils.augmented_image_loader import ImageLoader
 from propagation_model import ModelPropagate
-from utils.modules import SGD, GS, DPAC, PhysicalProp
+from utils.modules import SGD, GS, DPAC#, PhysicalProp
 from holonet import HoloNet, InitialPhaseUnet, FinalPhaseOnlyUnet, PhaseOnlyUnet
 from propagation_ASM import propagation_ASM
 
@@ -77,7 +77,7 @@ slm_res = (1080, 1920)  # resolution of SLM
 image_res = (1080, 1920)
 roi_res = (880, 1600)  # regions of interest (to penalize for SGD)
 dtype = torch.float32  # default datatype (Note: the result may be slightly different if you use float64, etc.)
-device = torch.device('cuda')  # The gpu you are using
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")  # The gpu you are using
 
 # Options for the algorithm
 loss = nn.MSELoss().to(device)  # loss functions to use (try other loss functions!)
@@ -91,13 +91,13 @@ utils.cond_mkdir(summaries_dir)
 writer = SummaryWriter(summaries_dir)
 
 # Hardware setup for CITL
-if opt.citl:
-    camera_prop = PhysicalProp(channel, laser_arduino=True, roi_res=(roi_res[1], roi_res[0]), slm_settle_time=0.12,
-                               range_row=(220, 1000), range_col=(300, 1630),
-                               patterns_path=f'F:/citl/calibration',
-                               show_preview=True)
-else:
-    camera_prop = None
+# if opt.citl:
+#     camera_prop = PhysicalProp(channel, laser_arduino=True, roi_res=(roi_res[1], roi_res[0]), slm_settle_time=0.12,
+#                                 range_row=(220, 1000), range_col=(300, 1630),
+#                                 patterns_path=f'F:/citl/calibration',
+#                                 show_preview=True)
+# else:
+camera_prop = None
 
 # Simulation model
 if opt.prop_model == 'ASM':

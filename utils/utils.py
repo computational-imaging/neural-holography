@@ -387,12 +387,15 @@ def write_sgd_summary(slm_phase, out_amp, target_amp, k,
     """
     loss = nn.MSELoss().to(out_amp.device)
     loss_value = loss(s * out_amp, target_amp)
-    psnr_value = psnr(target_amp.squeeze().cpu().detach().numpy(), (s * out_amp).squeeze().cpu().detach().numpy())
-    ssim_value = ssim(target_amp.squeeze().cpu().detach().numpy(), (s * out_amp).squeeze().cpu().detach().numpy())
+    temp = (s * out_amp).squeeze().cpu().detach().numpy();
+    psnr_value = psnr(target_amp.squeeze().cpu().detach().numpy(), temp)
+    ssim_value = ssim(target_amp.squeeze().cpu().detach().numpy(), temp, data_range=temp.max() - temp.min())
 
     s_min = (target_amp * out_amp).mean() / (out_amp**2).mean()
-    psnr_value_min = psnr(target_amp.squeeze().cpu().detach().numpy(), (s_min * out_amp).squeeze().cpu().detach().numpy())
-    ssim_value_min = ssim(target_amp.squeeze().cpu().detach().numpy(), (s_min * out_amp).squeeze().cpu().detach().numpy())
+    temp2 = (s_min * out_amp).squeeze().cpu().detach().numpy();
+    
+    psnr_value_min = psnr(target_amp.squeeze().cpu().detach().numpy(), temp2)
+    ssim_value_min = ssim(target_amp.squeeze().cpu().detach().numpy(), temp2, data_range=temp2.max() - temp2.min())
 
     if writer is not None:
         writer.add_image(f'{prefix}_Recon/amp', (s * out_amp).squeeze(0), k)
@@ -435,19 +438,19 @@ def get_psnr_ssim(recon_amp, target_amp, multichannel=False):
 
     # amplitude
     psnrs['amp'] = psnr(target_amp, recon_amp)
-    ssims['amp'] = ssim(target_amp, recon_amp, multichannel=multichannel)
+    ssims['amp'] = ssim(target_amp, recon_amp, multichannel=multichannel, data_range=recon_amp.max() - recon_amp.min())
 
     # linear
     target_linear = target_amp**2
     recon_linear = recon_amp**2
     psnrs['lin'] = psnr(target_linear, recon_linear)
-    ssims['lin'] = ssim(target_linear, recon_linear, multichannel=multichannel)
+    ssims['lin'] = ssim(target_linear, recon_linear, multichannel=multichannel, data_range=recon_linear.max() - recon_linear.min())
 
     # srgb
     target_srgb = srgb_lin2gamma(np.clip(target_linear, 0.0, 1.0))
     recon_srgb = srgb_lin2gamma(np.clip(recon_linear, 0.0, 1.0))
     psnrs['srgb'] = psnr(target_srgb, recon_srgb)
-    ssims['srgb'] = ssim(target_srgb, recon_srgb, multichannel=multichannel)
+    ssims['srgb'] = ssim(target_srgb, recon_srgb, multichannel=multichannel, data_range = recon_srgb.max()-recon_srgb.min())
 
     return psnrs, ssims
 
