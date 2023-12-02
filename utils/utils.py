@@ -84,6 +84,12 @@ def polar_to_rect(mag, ang):
     imag = mag * torch.sin(ang)
     return real, imag
 
+def polar_to_rect_just_ang(ang):
+    """Converts the polar complex representation to rectangular"""
+    real = torch.cos(ang)
+    imag = torch.sin(ang)
+    return real, imag
+
 
 def replace_amplitude(field, amplitude):
     """takes a Complex tensor with real/imag channels, converts to

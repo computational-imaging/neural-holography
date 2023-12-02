@@ -22,7 +22,7 @@ $ python main.py --channel=0 --algorithm=HOLONET --root_path=./phases --generato
 """
 
 import os
-import sys
+#import sys
 import cv2
 import torch
 import torch.nn as nn
@@ -31,9 +31,8 @@ from torch.utils.tensorboard import SummaryWriter
 
 import utils.utils as utils
 from utils.augmented_image_loader import ImageLoader
-from propagation_model import ModelPropagate
-from utils.modules import SGD, GS, DPAC#, PhysicalProp
-from holonet import HoloNet, InitialPhaseUnet, FinalPhaseOnlyUnet, PhaseOnlyUnet
+#from propagation_model import ModelPropagate
+from utils.modules import SGD, GS #, PhysicalProp
 from propagation_ASM import propagation_ASM
 
 # Command line argument processing
@@ -41,15 +40,14 @@ p = configargparse.ArgumentParser()
 p.add('-c', '--config_filepath', required=False, is_config_file=True, help='Path to config file.')
 
 p.add_argument('--channel', type=int, default=1, help='Red:0, green:1, blue:2')
-p.add_argument('--method', type=str, default='SGD', help='Type of algorithm, GS/SGD/DPAC/HOLONET/UNET')
+p.add_argument('--method', type=str, default='SGD', help='Type of algorithm, GS/SGD')
 p.add_argument('--prop_model', type=str, default='ASM', help='Type of propagation model, ASM or model')
 p.add_argument('--root_path', type=str, default='./phases', help='Directory where optimized phases will be saved.')
 p.add_argument('--data_path', type=str, default='./data', help='Directory for the dataset')
-p.add_argument('--generator_dir', type=str, default='./pretrained_networks',
-               help='Directory for the pretrained holonet/unet network')
-p.add_argument('--prop_model_dir', type=str, default='./calibrated_models',
-               help='Directory for the CITL-calibrated wave propagation models')
-p.add_argument('--citl', type=utils.str2bool, default=False, help='Use of Camera-in-the-loop optimization with SGD')
+# p.add_argument('--generator_dir', type=str, default='./pretrained_networks',
+#                help='Directory for the pretrained holonet/unet network')
+# p.add_argument('--prop_model_dir', type=str, default='./calibrated_models',
+#                help='Directory for the CITL-calibrated wave propagation models')
 p.add_argument('--experiment', type=str, default='', help='Name of experiment')
 p.add_argument('--lr', type=float, default=8e-3, help='Learning rate for phase variables (for SGD)')
 p.add_argument('--lr_s', type=float, default=2e-3, help='Learning rate for learnable scale (for SGD)')
@@ -58,15 +56,12 @@ p.add_argument('--num_iters', type=int, default=500, help='Number of iterations 
 # parse arguments
 opt = p.parse_args()
 run_id = f'{opt.experiment}_{opt.method}_{opt.prop_model}'  # {algorithm}_{prop_model} format
-if opt.citl:
-    run_id = f'{run_id}_citl'
+
 
 channel = opt.channel  # Red:0 / Green:1 / Blue:2
 chan_str = ('red', 'green', 'blue')[channel]
 
 print(f'   - optimizing phase with {opt.method}/{opt.prop_model} ... ')
-if opt.citl:
-    print(f'    - with camera-in-the-loop ...')
 
 # Hyperparameters setting
 cm, mm, um, nm = 1e-2, 1e-3, 1e-6, 1e-9
@@ -90,54 +85,29 @@ summaries_dir = os.path.join(root_path, 'summaries')
 utils.cond_mkdir(summaries_dir)
 writer = SummaryWriter(summaries_dir)
 
-# Hardware setup for CITL
-# if opt.citl:
-#     camera_prop = PhysicalProp(channel, laser_arduino=True, roi_res=(roi_res[1], roi_res[0]), slm_settle_time=0.12,
-#                                 range_row=(220, 1000), range_col=(300, 1630),
-#                                 patterns_path=f'F:/citl/calibration',
-#                                 show_preview=True)
-# else:
 camera_prop = None
 
 # Simulation model
 if opt.prop_model == 'ASM':
     propagator = propagation_ASM  # Ideal model
 
-elif opt.prop_model.upper() == 'MODEL':
-    blur = utils.make_kernel_gaussian(0.85, 3)
-    propagator = ModelPropagate(distance=prop_dist,  # Parameterized wave propagation model
-                                feature_size=feature_size,
-                                wavelength=wavelength,
-                                blur=blur).to(device)
+# elif opt.prop_model.upper() == 'MODEL':
+#     blur = utils.make_kernel_gaussian(0.85, 3)
+#     propagator = ModelPropagate(distance=prop_dist,  # Parameterized wave propagation model
+#                                 feature_size=feature_size,
+#                                 wavelength=wavelength,
+#                                 blur=blur).to(device)
 
-    # load CITL-calibrated model
-    propagator.load_state_dict(torch.load(f'{opt.prop_model_dir}/{chan_str}.pth', map_location=device))
-    propagator.eval()
+   
 
 
 # Select Phase generation method, algorithm
 if opt.method == 'SGD':
     phase_only_algorithm = SGD(prop_dist, wavelength, feature_size, opt.num_iters, roi_res, root_path,
-                               opt.prop_model, propagator, loss, opt.lr, opt.lr_s, s0, opt.citl, camera_prop, writer, device)
+                               opt.prop_model, propagator, loss, opt.lr, opt.lr_s, s0, writer, device)
 elif opt.method == 'GS':
     phase_only_algorithm = GS(prop_dist, wavelength, feature_size, opt.num_iters, root_path,
                               opt.prop_model, propagator, writer, device)
-elif opt.method == 'DPAC':
-    phase_only_algorithm = DPAC(prop_dist, wavelength, feature_size, opt.prop_model, propagator, device)
-elif opt.method == 'HOLONET':
-    phase_only_algorithm = HoloNet(prop_dist, wavelength, feature_size, initial_phase=InitialPhaseUnet(4, 16),
-                                   final_phase_only=FinalPhaseOnlyUnet(4, 16, num_in=2)).to(device)
-    model_path = os.path.join(opt.generator_dir, f'holonet20_{chan_str}.pth')
-    image_res = (1072, 1920)
-elif opt.method == 'UNET':
-    phase_only_algorithm = PhaseOnlyUnet(num_features_init=32).to(device)
-    model_path = os.path.join(opt.generator_dir, f'unet20_{chan_str}.pth')
-    image_res = (1024, 2048)
-
-if 'NET' in opt.method:
-    checkpoint = torch.load(model_path)
-    phase_only_algorithm.load_state_dict(checkpoint)
-    phase_only_algorithm.eval()
 
 
 # Augmented image loader (if you want to shuffle, augment dataset, put options accordingly.)
@@ -159,14 +129,10 @@ for k, target in enumerate(image_loader):
     phase_only_algorithm.init_scale = s0 * utils.crop_image(target_amp, roi_res, stacked_complex=False).mean()
     phase_only_algorithm.phase_path = os.path.join(root_path)
 
-    # run algorithm (See algorithm_modules.py and algorithms.py)
-    if opt.method in ['DPAC', 'HOLONET', 'UNET']:
-        # direct methods
-        _, final_phase = phase_only_algorithm(target_amp)
-    else:
-        # iterative methods, initial phase: random guess
-        init_phase = (-0.5 + 1.0 * torch.rand(1, 1, *slm_res)).to(device)
-        final_phase = phase_only_algorithm(target_amp, init_phase)
+       
+    # iterative methods, initial phase: random guess
+    init_phase = (-0.5 + 1.0 * torch.rand(1, 1, *slm_res)).to(device)
+    final_phase = phase_only_algorithm(target_amp, init_phase)
 
     print(final_phase.shape)
 

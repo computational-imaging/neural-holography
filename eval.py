@@ -27,7 +27,6 @@ import configargparse
 from propagation_ASM import propagation_ASM
 from utils.augmented_image_loader import ImageLoader
 import utils.utils as utils
-from utils.modules import PhysicalProp
 from propagation_model import ModelPropagate
 
 # Command line argument processing
@@ -38,8 +37,8 @@ p.add_argument('--channel', type=int, default=1, help='red:0, green:1, blue:2, r
 p.add_argument('--prop_model', type=str, default='ASM',
                help='Type of propagation model for reconstruction: ASM / MODEL / CAMERA')
 p.add_argument('--root_path', type=str, default='./phases', help='Directory where test phases are being stored.')
-p.add_argument('--prop_model_dir', type=str, default='./calibrated_models/',
-               help='Directory for the CITL-calibrated wave propagation models')
+# p.add_argument('--prop_model_dir', type=str, default='./calibrated_models/',
+#                help='Directory for the CITL-calibrated wave propagation models')
 p.add_argument('--calibration_path', type=str, default=f'./calibration',
                help='Directory where calibration phases are being stored.')
 
@@ -58,10 +57,7 @@ feature_size = (6.4*um, 6.4*um)  # SLM pitch
 
 # Resolutions
 slm_res = (1080, 1920)  # resolution of SLM
-if 'HOLONET' in run_id.upper():
-    slm_res = (1072, 1920)
-elif 'UNET' in run_id.upper():
-    slm_res = (1024, 2048)
+
 
 image_res = (1080, 1920)
 roi_res = (880, 1600)  # regions of interest (to penalize)
@@ -75,12 +71,6 @@ if opt.prop_model == 'ASM':
     for c in chs:
         precomputed_H[c] = propagator(torch.empty(1, 1, *slm_res, 2), feature_size,
                                       wavelengths[c], prop_dists[c], return_H=True).to(device)
-
-elif opt.prop_model.upper() == 'CAMERA':
-    propagator = PhysicalProp(channel, laser_arduino=True, roi_res=(roi_res[1], roi_res[0]), slm_settle_time=0.15,
-                              range_row=(220, 1000), range_col=(300, 1630),
-                              patterns_path=opt.calibration_path,  # path of 21 x 12 calibration patterns, see Supplement.
-                              show_preview=True)
 elif opt.prop_model.upper() == 'MODEL':
     blur = utils.make_kernel_gaussian(0.85, 3)
     propagators = {}
